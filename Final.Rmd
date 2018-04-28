@@ -1,0 +1,562 @@
+---
+title: "Time Series model fitting of Boston Weather Data"
+author: "Vivek Vikram Magadi"
+date: "April 13, 2018"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+library(lubridate)
+library(rugarch)
+library(vars)
+library(readr)
+library(forecast)
+library(astsa)
+#library(MTS)
+library(tseries)
+library(gridExtra)
+```
+
+## Reading Data
+The dataset that we have considered to work on is the Boston Weather dataset from July 2012 - August 2015. The dataset contains 5 different variables:
+1. Temperature
+2. Dewpoint
+3. Humidity
+4. Wind
+5. Precipitation
+
+As we shall see in the later part of the project, the precipitation variable shall not be considered as it is white noise.
+
+Our data contains 1157 observations and 5 variables. Each observation is recorded on a daily basis. 
+
+Hypothesis : Our hypothesis is to forecast values of each variable.
+We have built two sets of models for comparison purposes. 
+In the first set of models we model each variable as a univariate time series using ARIMA/SARIMA.
+In the second set of models we model a Vector Auto-Regressive model on all 4 variables.
+Then we compare to see if the Vector Auto-Regressive model gave us a better fit or did the Arima/Sarima models give us a better fit.
+
+```{r , echo=FALSE,message=FALSE,warning=FALSE}
+weatherdata <- read_csv("C:/Vivek's Stuff/Classes/Time Series/Project/weatherdata.xls")
+str(weatherdata)
+
+```
+
+The timestamp was split into day, month and year variables starting from August 2015 to July 2012. we shall club them into a single variable and then reverse the order of the observations.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+weatherdata$time <- as.Date(with(weatherdata, paste(year, month, day,sep="-")), "%Y-%m-%d")
+weatherdata$day <- NULL
+weatherdata$month <- NULL
+weatherdata$year <- NULL
+#Order in reverse. 
+weatherdata <- weatherdata[order(weatherdata$time),]
+```
+
+
+## Mean Difference
+First we subtract the mean from all the variables to center them on the X axis.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+humidity <- mean(weatherdata$humidity)
+precipitation <- mean(weatherdata$precipitation)
+wind <- mean(weatherdata$wind)
+dewpoint <- mean(weatherdata$dewpoint)
+temperature <- mean(weatherdata$temperature)
+```
+
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#Subtracting mean from each of the time series
+weatherdata$humidity <- weatherdata$humidity - humidity
+weatherdata$precipitation <- weatherdata$precipitation - precipitation
+weatherdata$wind <- weatherdata$wind - wind
+weatherdata$dewpoint <- weatherdata$dewpoint - dewpoint
+weatherdata$temperature <- weatherdata$temperature - temperature
+```
+
+##Plotting all the time series
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+tsplot(weatherdata$precipitation,x = weatherdata$time,main="Precipitation")
+tsplot(weatherdata$temperature,x = weatherdata$time,main="Temperature")
+tsplot(weatherdata$dewpoint,x = weatherdata$time,main="Dewpoint")
+tsplot(weatherdata$humidity,x = weatherdata$time,main="Humidity")
+tsplot(weatherdata$wind,x = weatherdata$time,main="Wind")
+```
+
+From the above Time Series plots we can see that precipitation almost looks like white noise; Temperature and Dewpoint have seasonal patterns ( looks like a yearly pattern).
+
+## Decomposing Time Series plots
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#Temperature
+temperature_stl<- stl(ts(weatherdata$temperature,frequency=365),s.window = "periodic")
+plot(temperature_stl,main="Temperature")
+#Humidity
+humidity_stl<- stl(ts(weatherdata$humidity,frequency=30),s.window = "periodic")
+plot(humidity_stl,main="Humidity")
+#Dewpoint
+dewpoint_stl<- stl(ts(weatherdata$dewpoint,frequency=365),s.window = "periodic")
+plot(dewpoint_stl,main="Dewpoint")
+#Wind
+wind_stl<- stl(ts(weatherdata$wind,frequency=30),s.window = "periodic")
+plot(wind_stl,main="Wind")
+#Precipitation
+precipitation_stl <- stl(ts(weatherdata$precipitation,frequency=30),s.window = "periodic")
+plot(precipitation_stl,main="Precipitation")
+```
+
+The above plots show a decomposed version of each time series by using loess. Temperature and Dewpoint are considered on a yearly basis whereas humidity, wind and precipitation are considered on a monthly basis.
+
+
+## Interpretting ACF and PACF 
+
+## Humidity
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(5,5,5,5))
+acf(weatherdata$humidity,plot = T,main="ACF for Humidity")
+pacf(weatherdata$humidity,plot=T,main=" PACF for humidity")
+```
+
+We can see that the lags in AutoCorrelation and Partial Autocorrelation plots die off after a certain number of significant lags so we can assume stationarity. To quantify stationarity we shall conduct the dickey-fuller test.
+
+By looking at the significant lags of the ACF we determine the MA lag term and that of the PACF determines the ACf term.
+ACF : 3 significant lags. Also there looks like there exists a seasonal pattern in the data as denoted by lag 12 and it's surroundings.
+PACF : 2 significant lags. The seasonal lags persist in the PACF plot as well.
+
+
+## Dewpoint
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+acf(weatherdata$dewpoint,plot=T,main="ACF for Dewpoint")
+pacf(weatherdata$dewpoint,plot=T,main="PACF for Dewpoint")
+```
+
+The PACF plot indicates that a significant correlation occurs at lag 2.
+The ACF plot indicates that an auto-regressive model might be a right fit to the model as indicated by the slow decay in the correlations.
+
+## Precipitation
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(3,3,3,3))
+acf(weatherdata$precipitation,plot=T,main="ACF for Precipitation")
+pacf(weatherdata$precipitation,plot=T,main ="PACF for Precipitation")
+```
+
+The ACF plot does not present any significant lags. But it is noticed that lags of same correlation occur at regular intervals of 4.
+The PACF plot shows that the significant correlations occur only at lags 3 and 22.
+This series mainly indicates white noise and shall not be considered for our analysis.
+
+## Wind
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+acf(weatherdata$wind,plot=T,main="ACf for Wind")
+pacf(weatherdata$wind,main="PACF for wind")
+```
+
+The ACf tells us that there is a significant correlation at lag 1. Also a seasonal lag of 5 might be present.
+The PACF does not present us with much information apart from the fact that some seasonal lag might exist.
+
+## Temperature
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+acf(weatherdata$temperature,plot=T,main = "ACF for temperature")
+pacf(weatherdata$temperature,plot=T,main ="PACF for temperature")
+```
+
+The ACF plot shows slow decay indicating an auto-regressive model might be appropriate over here. Looking at the PACF we can see that a significant correlation occurs at lag 2 followed by some seasonal variation. 
+
+##Spectral Analysis
+
+
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+spec.pgram(weatherdata$temperature,spans=c(5,5),main = "Temperature")
+spec.pgram(weatherdata$wind,log="no",spans=c(5,5),main = "Wind")
+spec.pgram(weatherdata$dewpoint,spans=c(5,5),main = "Dewpoint")
+spec.pgram(weatherdata$humidity,log="no",spans=c(10,10),main = "Humidity")
+```
+
+Except wind all the other variables have the trend that as the frequency gets higher, the amplitude gets smaller.
+Humidity shows that it the frequency with the highest amplitude indicates that it changes every ~90 days(1 season).
+Wind also looks like the frequency with the highest amplitude occurs at a cycle of about 80 - 90 days. 
+Temperature and Dewpoint spectral plots are similar with dewpoint having a higher amplitude at corresponding frequencies.
+
+## Fitting Data
+
+We noticed that there was seasonality in temperature and dewpoint We shall get rid of them by harmonic regression. A frequency of 3/N was taken.
+Temperature.
+
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#Temperature
+a <- length(weatherdata$temperature)
+time <- 1:a
+s1 <- cos(2*3.14*time*(3/a))
+s2 <- sin(2*3.14*time*(3/a))
+temp_res <- lm(weatherdata$temperature~time +s1)
+tsplot(temp_res$fitted.values,main = "Fitted Values of Harmonic Regresison")
+
+#Check residuals 
+tsplot(temp_res$residuals,main="Residuals of Harmonic Regresison")
+
+```
+
+Dewpoint
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+#Dewpoint
+
+s12 <- cos(2*3.14*time*(3/a))
+s22 <- sin(2*3.14*time*(3/a))
+temp_dew <- lm(weatherdata$dewpoint~time +s12+s22)
+tsplot(temp_dew$fitted.values,main="Fitted values of dewpoint after harmonic regression")
+
+#Check Residuals
+tsplot(temp_res$residuals,main="Residuals after harmonic Regression")
+
+```
+
+We shall work on the residuals of harmonic regression applied on temperature and dewpoint variables.
+
+
+##Checking stationarity via Dickey - Fuller Test
+
+Dickey- fuller test checks the null hypothesis whether unit roots of the characteristic equation is present. If the p-value of the test is below 0.05 we reject the null hypothesis in favor of the alternative saying that all the roots of the charactersitic equation are greater than 1 ie the roots lie outside the unit circle.
+
+Humidity
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+adf.test(weatherdata$humidity,alternative = "stationary")
+```
+
+
+Dew Point
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+adf.test(temp_dew$residuals,alternative = "stationary")
+```
+
+Wind
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+adf.test(weatherdata$wind,alternative = "stationary")
+```
+
+Temperature
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+adf.test(temp_res$residuals,alternative = "stationary")
+```
+
+All of the p-values are significant and hence we conclude that all of our time series are stationary.
+
+## Cross Correlation Plots
+
+
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+ccf(weatherdata$humidity,temp_res$residuals,main="Humidity and Temperature")
+```
+
+Humidity lags temperature. Thus humidity can be used as a predictor for temperature.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+ccf(weatherdata$humidity,temp_dew$residuals,main="Humidity and Dewpoint")
+```
+
+Humidity slightly leads dewpoint. Dewpoint might be a useful predictor for Humidity.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+
+ccf(weatherdata$humidity,weatherdata$wind,main="Humidity and Wind")
+```
+
+Humidity slightly leads wind. Wind might be a useful predictor for humidity.
+
+
+
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+
+ccf(temp_res$residuals,temp_dew$residuals,main="Dewpoint and Temperature")
+```
+
+There is no strict lag/lead relationship that we can infer from this plot. We can just say that both the variables cause each other just like a cycle.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+
+ccf(temp_dew$residuals,weatherdata$wind,main="Dewpoint and Wind")
+```
+
+Dewpoint lags wind at lag 1,2 and 3.
+Dewpoint might be a useful predictor for wind. 
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+par(mar=c(4,4,4,4))
+
+ccf(weatherdata$wind,temp_res$residuals,main="Wind and Temperature")
+```
+
+Wind leads Temperature at lags 2,3 and 4.
+Temperature might be a useful predictor for wind.
+
+
+Now all the time series are stationary
+
+##Model Fitting
+
+Going to fit an ARIMA model for each of them to see how it performs.
+
+Temperature
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+fit_temp <- Arima(temp_res$residuals,order=c(2,0,2),seasonal = list(order=c(1,0,0),period=12))
+tsplot(weatherdata$temperature,main = "Temperature fit")
+lines(temp_res$fitted.values +fit_temp$fitted,col="red")
+fit_temp
+par(mar=c(4,4,4,4))
+acf(fit_temp$residuals,plot=T,main="Residuals of Temperature")
+```
+
+Dewpoint
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+fit_dew <- Arima(temp_dew$residuals,order=c(2,0,2),seasonal = list(order=c(1,0,0),period=12))
+tsplot(weatherdata$dewpoint,main ="Dewpoint Fit")
+lines(temp_dew$fitted.values + fit_dew$fitted,col="red")
+fit_dew
+par(mar=c(4,4,4,4))
+acf(fit_dew$residuals,plot=T,main="Residuals of Dewpoint")
+```
+
+Humidity
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+fit_hum <- Arima(weatherdata$humidity,order=c(1,0,2))
+tsplot(weatherdata$humidity,main="Humidity Fit")
+lines(fit_hum$fitted,col="red")
+fit_hum
+par(mar=c(4,4,4,4))
+acf(fit_hum$residuals,plot=T,main="Residuals of Humidity")
+```
+
+Wind
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+fit_win <- Arima(weatherdata$wind,order=c(1,0,2))
+tsplot(weatherdata$wind,main = "Wind Fit")
+lines(fit_win$fitted,col="red")
+fit_win
+par(mar=c(4,4,4,4))
+acf(fit_win$residuals,plot=T,main="Residuals of Wind")
+#plot(predict(fit_win,n.ahead=10))
+```
+
+Conclusion : Temperature and Dewpoint models presented a good fit. Whereas humidity model fit was underfit and the wind model fit was overshot.
+
+##VAR Modelling
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+newdata <- data.frame(temperature=temp_res$residuals,dewpoint=temp_dew$residuals,wind=weatherdata$wind,humidity=weatherdata$humidity)
+
+VARselect(weatherdata[,c(2:5)])
+
+
+var_fit <- VAR(weatherdata[,c(2:5)],p = 5,type="const")
+#var_pred <- predict(var_fit,newdata,n.ahead = 100)
+#plot(var_pred)
+```
+
+Model Parameters
+
+```{r,echo=F,message=F,warning=F}
+summary(var_fit)
+```
+
+
+```{r,echo=F,warning=F,message = F}
+
+#checking fit
+#Temperature
+tsplot(weatherdata$temperature,main = "Temperature")
+lines(fitted(var_fit)[,1],col="red")
+
+#Humidity
+tsplot(weatherdata$humidity,main ="Humidity")
+lines(fitted(var_fit)[,3],col="red")
+
+#Wind
+tsplot(weatherdata$wind,main = "Wind")
+lines(fitted(var_fit)[,4],col="red")
+
+
+#Dewpoint
+tsplot(weatherdata$dewpoint,main = "Dewpoint")
+lines(fitted(var_fit)[,2],col="red")
+
+
+#Test residuals
+par(mar=c(4,4,4,4))
+#Temperature
+acf(resid(var_fit)[,1],plot=T,main="Temperature Residuals")
+Box.test(resid(var_fit)[,1],lag=5)
+#Dewpoint
+acf(resid(var_fit)[,2],plot=T,main = "Dewpoint Residuals")
+#Humidity
+acf(resid(var_fit)[,3],main = "Humidity Residuals")
+#Wind
+acf(resid(var_fit)[,4],main ="Wind Residuals")
+
+
+#Plotting Actual residuals
+#tsplot(resid(var_fit)[,1])
+#tsplot(resid(var_fit)[,2])
+#tsplot(resid(var_fit)[,3])
+#tsplot(resid(var_fit)[,4])
+
+```
+
+Granger - Causality
+```{r,echo=F,warning=F,message=F}
+causality(var_fit,cause ="dewpoint")$Granger
+```
+
+Temperature has an effect on dewpoint,humidity and wind.
+
+Wind has an effect on temperature, dewpoint and humidity.
+
+Humidity does not have a significant effect on temperature,dewpoint and wind.
+
+Dewpoint(p-value : 0.06) may or may not have an effect on temperature,humidity and wind depending on the threshold.
+
+CCF Results:
+Humidity might be used to predict wind and temperature.
+
+Temperature can be predicted by Humidity.
+
+Dewpoint might be a useful predictor for Humidity.
+
+Dewpoint might be a good predictor for wind.
+
+Dewpoint and temperature seem to have a cycle effect.
+
+Temperature might be a useful predictor for wind.
+
+## Extra: Forecasting using STL 
+
+Using STL Decompostion.
+Fit ARIMA model on residuals.
+
+
+
+Temperature:
+  Using STL Decomposition + ARIMA on the residuals.
+Frequency is set to 365 as seasons occur on a yearly basis.
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+temperature_stl<- stl(ts(weatherdata$temperature,frequency=365),s.window = "periodic")
+temperature_df <- data.frame(temperature_stl$time.series)
+
+#Finding out AR and MA lags for the remainder of the series
+acf(temperature_df$remainder)
+pacf(temperature_df$remainder)
+
+fit <- Arima(temperature_df$remainder,order=c(1,0,1))
+AIC(fit)
+BIC(fit)
+
+fit
+
+f <- forecast(temperature_stl, h=250,forecastfunction=function(x,h,level){
+  fit <- Arima(x,order=c(1,0,1),include.mean = F)
+  return(forecast(fit,h=250,level=level))})
+plot(f,include=1000)
+```
+
+Humidity:
+  
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+  
+humidity_stl<- stl(ts(weatherdata$humidity,frequency=365),s.window = "periodic")
+humidity_df <- data.frame(humidity_stl$time.series)
+
+
+#Finding out AR and MA lags for the remainder of the series
+acf(humidity_df$remainder)
+pacf(humidity_df$remainder)
+
+fit <- Arima(humidity_df$remainder,order=c(1,0,1))
+AIC(fit)
+BIC(fit)
+
+fit
+f <- forecast(humidity_stl, h=250,forecastfunction=function(x,h,level){
+  fit <- Arima(x,order=c(1,0,1),include.mean = F)
+  return(forecast(fit,h=250,level=level))})
+plot(f,include=1000)
+```
+
+
+Dewpoint
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+dewpoint_stl<- stl(ts(weatherdata$dewpoint,frequency=365),s.window = "periodic")
+dewpoint_df <- data.frame(dewpoint_stl$time.series)
+
+#Finding out AR and MA lags for the remainder of the series
+acf(dewpoint_df$remainder)
+pacf(dewpoint_df$remainder)
+
+fit
+
+fit <- Arima(dewpoint_df$remainder,order=c(1,0,1))
+AIC(fit)
+BIC(fit)
+
+f <- forecast(dewpoint_stl, h=250,forecastfunction=function(x,h,level){
+  fit <- Arima(x,order=c(1,0,1),include.mean = F)
+  return(forecast(fit,h=250,level=level))})
+plot(f,include=1000)
+```
+
+
+Wind
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+wind_stl<- stl(ts(weatherdata$wind,frequency=365),s.window = "periodic")
+wind_df <- data.frame(wind_stl$time.series)
+
+#Finding out AR and MA lags for the remainder of the series
+acf(wind_df$remainder)
+pacf(wind_df$remainder)
+
+fit <- Arima(wind_df$remainder,order=c(0,0,1))
+AIC(fit)
+BIC(fit)
+
+fit
+
+f <- forecast(wind_stl, h=250,forecastfunction=function(x,h,level){
+  fit <- Arima(x,order=c(0,0,1),include.mean = F)
+  return(forecast(fit,h=250,level=level))})
+plot(f,include=1000)
+```
+
+
+Conclusion:
+VAR Model does not seem to be a good fit. Need to try VARMA.
+
+
